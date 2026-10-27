@@ -2,9 +2,9 @@
 
 ### AI-Assisted Digital Forensics and Cyber Incident Investigation
 
-CyberGuard is an AI-assisted digital forensics project designed to help investigate suspicious cyber activities by combining forensic disk-image examination, rule-based log analysis, local large language model (LLM) analysis, and automated report generation.
+CyberGuard is an AI-assisted digital forensics project designed to help investigate suspicious cyber activities by combining forensic disk-image examination, rule-based log analysis, local large language model (LLM) analysis, CrewAI-assisted review, and automated report generation.
 
-The system uses The Sleuth Kit (TSK) to inspect supported forensic images and extract available file contents. It uses Qwen 2.5 3B through Ollama to assist in interpreting extracted text artifacts and explaining their potential significance.
+The system uses The Sleuth Kit (TSK) to inspect supported forensic images and extract available file contents. It uses Qwen 2.5 3B through Ollama to assist in interpreting extracted text artifacts, and it also includes a CrewAI review layer to assess findings from an investigative perspective before they are folded into the final report.
 
 > Project status: Educational project under development. Findings require human verification and are not definitive proof of malicious activity.
 
@@ -15,6 +15,7 @@ The system uses The Sleuth Kit (TSK) to inspect supported forensic images and ex
 - 📄 File content extraction — extracts available file contents from supported forensic images.
 - 🚨 Suspicious log analysis — applies rule-based checks to identify recognized suspicious patterns in supplied logs.
 - 🧠 Local AI-assisted analysis — uses Qwen 2.5 3B through Ollama to interpret extracted text artifacts.
+- 🤝 CrewAI review layer — uses a multi-agent investigator workflow to review evidence and integrate cautious findings into the final report.
 - 🕒 Investigation timeline — organizes available events chronologically.
 - 🧩 Hypothesis generation — helps formulate possible explanations based on available findings.
 - 📝 Investigation reporting — generates structured reports with findings, hypotheses, and limitations.
@@ -32,6 +33,7 @@ The system uses The Sleuth Kit (TSK) to inspect supported forensic images and ex
 | The Sleuth Kit | Forensic filesystem inspection and file extraction |
 | Ollama | Local language model runtime |
 | Qwen 2.5 3B | AI-assisted artifact interpretation |
+| CrewAI | Multi-agent evidence review and investigative analysis |
 | HTML, CSS, JavaScript | User interface and report presentation |
 
 ## 🏗️ Architecture
@@ -59,6 +61,9 @@ The system uses The Sleuth Kit (TSK) to inspect supported forensic images and ex
                   Ollama / Qwen
                AI-Assisted Analysis
                          |
+                  CrewAI Review
+             Multi-agent evidence review
+                         |
                Investigation Results
                          |
              Evidence, Timeline, Report
@@ -77,17 +82,19 @@ CyberGuard integrates the following forensic utilities:
 
 > Deleted-file recovery is not yet implemented as a complete automated workflow. Identifying a deleted entry does not guarantee that its contents can be recovered.
 
-## 🤖 AI Model
+## 🤖 AI Model and CrewAI Review
 
-CyberGuard uses Qwen 2.5 3B, running locally through Ollama.
+CyberGuard uses Qwen 2.5 3B, running locally through Ollama, and adds a CrewAI review layer for multi-agent investigation analysis.
 
-The model assists with:
+The core model assists with:
 
 - Interpreting extracted text artifacts.
 - Describing their potential forensic significance.
 - Suggesting alternative explanations.
 - Recommending additional verification steps.
 - Supporting investigation report preparation.
+
+The CrewAI layer complements this workflow by reviewing the collected evidence with a structured investigative agent that focuses on cautious evidence interpretation, credential-related indicators, and file-transfer or network-related context. It is designed to feed into the final investigation report without replacing the original forensic evidence or the analyst's judgment.
 
 The AI output is advisory. It may contain errors or unsupported interpretations and must be checked against the original evidence.
 
