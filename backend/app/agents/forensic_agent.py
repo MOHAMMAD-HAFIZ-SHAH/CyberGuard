@@ -1,13 +1,106 @@
 
+import re
 from typing import Any
+
+
+# These are investigation indicators, not proof of malicious activity.
+CREDENTIAL_PATTERNS = (
+    r"\bpassword\b",
+    r"\bpasswd\b",
+    r"\bcredentials?\b",
+    r"\blogin\s+(?:id|details|information)\b",
+    r"\busername\b",
+    r"\baccess\s+token\b",
+    r"\bapi[_ -]?key\b",
+)
+
+TRANSFER_PATTERNS = (
+    r"\bftp://",
+    r"\bsftp://",
+    r"\bupload(?:ing)?\b",
+    r"\bdownload(?:ing)?\b",
+    r"\btransfer(?:ring)?\s+files?\b",
+    r"\bsend\s+(?:the\s+)?files?\b",
+    r"\bfile\s+sharing\b",
+)
+
+NETWORK_PATTERNS = (
+    r"\bhttps?://",
+    r"\bftp\b",
+    r"\bsftp\b",
+    r"\bserver\b",
+    r"\bremote\s+(?:host|server|location)\b",
+)
+
+
+def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
+    """Return whether text matches at least one indicator pattern."""
+    return any(
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for pattern in patterns
+    )
+
+
+def _detect_indicators(text: str) -> list[dict[str, str]]:
+    """
+    Identify possible credential and data-transfer indicators.
+
+    Detection is based on text patterns only. It does not establish
+    that credentials are valid or that a transfer actually occurred.
+    """
+    indicators: list[dict[str, str]] = []
+
+    has_credentials = _matches_any(text, CREDENTIAL_PATTERNS)
+    has_transfer = _matches_any(text, TRANSFER_PATTERNS)
+    has_network = _matches_any(text, NETWORK_PATTERNS)
+
+    if has_credentials:
+        indicators.append({
+            "type": "possible_credential_reference",
+            "significance": (
+                "The artifact appears to refer to passwords, "
+                "credentials, tokens, or account access information."
+            ),
+        })
+
+    if has_transfer:
+        indicators.append({
+            "type": "possible_file_transfer",
+            "significance": (
+                "The artifact appears to refer to uploading, "
+                "downloading, sending, or transferring files."
+            ),
+        })
+
+    if has_network:
+        indicators.append({
+            "type": "network_service_reference",
+            "significance": (
+                "The artifact appears to mention a network protocol, "
+                "URL, server, or remote location."
+            ),
+        })
+
+    if has_credentials and has_transfer:
+        indicators.append({
+            "type": "possible_credential_transfer_context",
+            "significance": (
+                "Credential-related language and file-transfer "
+                "language occur in the same artifact. Review the "
+                "original evidence to determine their relationship."
+            ),
+        })
+
+    return indicators
 
 
 def analyze_forensic_evidence(evidence: list[dict]) -> dict:
     """
-    Prepare extracted forensic evidence for investigation.
+    Organize extracted forensic evidence and flag review indicators.
 
+    Original extracted text is preserved for authorized forensic review.
+    Indicators are leads for investigation, not verified conclusions.
     This function does not extract files from disk images.
-    It summarizes evidence already collected by CyberGuard.
     """
 
     if not evidence:
@@ -33,13 +126,15 @@ def analyze_forensic_evidence(evidence: list[dict]) -> dict:
         if not isinstance(metadata, dict):
             metadata = {}
 
-        # Evidence collected from disk images may store its content
-        # in metadata or directly in a text_content field.
+        # Accept text from either supported location without modifying it.
         text_content = (
             item.get("text_content")
             or metadata.get("text_content")
             or ""
         )
+
+        original_text = str(text_content)
+        indicators = _detect_indicators(original_text)
 
         findings.append({
             "finding_id": f"FE-{index:03d}",
@@ -47,16 +142,23 @@ def analyze_forensic_evidence(evidence: list[dict]) -> dict:
             "event_type": str(event_type),
             "timestamp": timestamp,
             "description": str(description or ""),
-            "extracted_text": str(text_content),
+            # Preserve original text for authorized evidence examination.
+            "extracted_text": original_text,
             "metadata": metadata,
+            "indicators": indicators,
+            "requires_human_review": bool(indicators),
+            "verification_status": "not_independently_verified",
         })
 
     return {
         "status": "completed",
         "message": (
-            "Extracted evidence has been organized for investigation. "
-            "This step does not independently verify suspicious activity."
+            "Extracted evidence has been organized and screened for "
+            "possible credential and file-transfer indicators. "
+            "Original text is preserved. Indicators do not prove that "
+            "credentials are valid, activity was unauthorized, or a "
+            "file transfer succeeded."
         ),
-        "evidence_count": len(evidence),
+        "evidence_count": len(findings),
         "findings": findings,
     }

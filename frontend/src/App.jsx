@@ -1,4 +1,3 @@
-
 import { useRef, useState } from "react";
 import "./App.css";
 
@@ -413,7 +412,7 @@ function App() {
   function downloadProfessionalReport() {
     if (!result) return;
 
-    // Escape all dynamic content before inserting it into HTML.
+    // Escape dynamic content before inserting it into HTML.
     const escapeHtml = (value) =>
       String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -717,7 +716,7 @@ ${section("6. Investigative Hypotheses", hypothesesHtml)}
 ${section("7. Forensic Artifact Analysis", analysesHtml)}
 
 ${section(
-  "8. Backend Investigation Report",
+  "8. Unified Investigation Report",
   `<pre>${originalReport}</pre>`
 )}
 
@@ -1257,7 +1256,7 @@ ${section(
           )}
 
           <section className="dashboard-section report-section">
-            <h3>Investigation Report</h3>
+            <h3>Unified Investigation Report</h3>
 
             <pre>
               {typeof result.report === "string"

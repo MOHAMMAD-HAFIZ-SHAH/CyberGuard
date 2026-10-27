@@ -10,13 +10,20 @@ from backend.app.agents.verification_agent import verify_hypotheses
 from backend.app.agents.contradiction_agent import find_contradictions
 from backend.app.agents.timeline_agent import create_timeline
 from backend.app.agents.report_agent import generate_report
+
 from backend.app.core.evidence_manager import summarize_evidence
+from backend.app.core.crewai_investigator import (
+    review_investigation_with_crew,
+)
+
 from backend.app.models.incident import IncidentRequest
 from backend.app.models.evidence import Evidence
+
 from backend.app.services.tsk_service import (
     list_filesystem_entries,
     extract_file_content,
 )
+
 from backend.app.services.ollama_service import analyze_forensic_artifact
 
 
@@ -44,7 +51,7 @@ def _collect_image_artifacts(
     Collect a bounded number of supported text artifacts from a
     forensic image using The Sleuth Kit.
 
-    Artifact timestamps are not inferred from collection time,
+    Original timestamps are not inferred from collection time,
     filenames, or AI interpretation.
     """
     image = Path(image_path).expanduser()
@@ -75,9 +82,6 @@ def _collect_image_artifacts(
         if len(collected) >= MAX_ARTIFACTS_PER_IMAGE:
             break
 
-        # TSK output may use a tab after the colon, for example:
-        # r/r 7:    suicide1.txt
-        # Split on the colon alone, then remove tabs and spaces.
         try:
             prefix, file_name = line.split(":", 1)
             prefix = prefix.strip()
@@ -85,7 +89,7 @@ def _collect_image_artifacts(
         except ValueError:
             continue
 
-        # Process regular-file entries only.
+        # Process regular files only.
         if not prefix.startswith(("r/r ", "r/- ", "r/* ")):
             continue
 
@@ -108,9 +112,7 @@ def _collect_image_artifacts(
         except ValueError:
             errors.append({
                 "path": file_name,
-                "error": (
-                    f"Invalid metadata address: {address_text}"
-                ),
+                "error": f"Invalid metadata address: {address_text}",
             })
             continue
 
@@ -155,9 +157,7 @@ def _collect_image_artifacts(
                 errors.append({
                     "metadata_address": metadata_address,
                     "path": file_name,
-                    "error": (
-                        "Artifact is not valid UTF-8 text."
-                    ),
+                    "error": "Artifact is not valid UTF-8 text.",
                 })
                 continue
 
@@ -194,6 +194,10 @@ def run_investigation(request: IncidentRequest) -> dict:
     """
     Run a CyberGuard investigation using supplied logs and,
     optionally, a local forensic disk image.
+
+    CrewAI analysis is incorporated into the existing final report.
+    Original evidence, deterministic checks, and AI interpretations
+    remain distinguishable.
     """
     if isinstance(request, dict):
         request = IncidentRequest(**request)
@@ -211,17 +215,17 @@ def run_investigation(request: IncidentRequest) -> dict:
         request.log_text,
     )
 
-    # Analyze the supplied logs using the existing log agent.
+    # 1. Analyze supplied logs using the existing log agent.
     log_evidence = investigate_logs(request.log_text)
 
-    # Normalize evidence into dictionaries for downstream agents.
+    # 2. Normalize evidence into dictionaries for downstream agents.
     evidence: list[dict] = []
 
     for item in log_evidence:
         if isinstance(item, Evidence):
             evidence.append(item.model_dump())
         elif isinstance(item, dict):
-            evidence.append(item)
+            evidence.append(dict(item))
         else:
             raise ValueError(
                 "The log agent returned an unsupported evidence type."
@@ -230,10 +234,11 @@ def run_investigation(request: IncidentRequest) -> dict:
     artifact_analyses: list[dict] = []
     collection_errors: list[dict] = []
 
+    # 3. Optionally collect forensic artifacts from a disk image.
     if request.image_path:
         try:
-            artifacts, extraction_errors = (
-                _collect_image_artifacts(request.image_path)
+            artifacts, extraction_errors = _collect_image_artifacts(
+                request.image_path
             )
             collection_errors.extend(extraction_errors)
 
@@ -259,8 +264,7 @@ def run_investigation(request: IncidentRequest) -> dict:
                 f"{Path(artifact_path).name}"
             )
 
-            # Record the extracted artifact as evidence.
-            # Its content is preserved separately from the AI opinion.
+            # Preserve extracted content separately from AI interpretation.
             evidence.append(
                 Evidence(
                     evidence_id=artifact_id,
@@ -286,7 +290,7 @@ def run_investigation(request: IncidentRequest) -> dict:
                 ).model_dump()
             )
 
-            # AI output is an interpretation, not verified evidence.
+            # Retain the existing Ollama artifact analysis.
             try:
                 ai_result = analyze_forensic_artifact(
                     evidence_text=artifact["text"],
@@ -325,20 +329,33 @@ def run_investigation(request: IncidentRequest) -> dict:
                     "error": f"AI analysis failed: {error}",
                 })
 
-    # Continue through the existing investigation agents.
+    # 4. Run existing hypothesis and verification agents.
     hypotheses = generate_hypotheses(evidence)
     hypotheses = verify_hypotheses(hypotheses, evidence)
     hypotheses = find_contradictions(hypotheses, evidence)
 
+    # 5. Build the existing event timeline.
     timeline = create_timeline(evidence)
 
+    # 6. Run CrewAI BEFORE generating the final report.
+    # Its output is advisory and does not replace evidence verification.
+    crewai_review = review_investigation_with_crew(
+        title=request.title,
+        description=request.description,
+        evidence=evidence,
+    )
+
+    # 7. Generate one unified report with CrewAI analysis integrated.
+    # The report agent keeps AI interpretations distinct from verified facts.
     report = generate_report(
         request.title,
         request.description,
         evidence,
         hypotheses,
+        crewai_analysis=crewai_review,
     )
 
+    # 8. Return the complete investigation result.
     return {
         "incident_id": incident_id,
         "title": case["title"],
@@ -350,10 +367,11 @@ def run_investigation(request: IncidentRequest) -> dict:
         "timeline": timeline,
         "report": report,
         "forensic_artifact_analyses": artifact_analyses,
+        "crewai_review": crewai_review,
         "collection_errors": collection_errors,
         "note": (
-            "Rule-based and AI-assisted findings require human "
-            "validation. AI interpretations are not verified "
-            "forensic facts. Preserve the original evidence."
+            "Rule-based and AI-assisted findings require human validation. "
+            "AI interpretations are not verified forensic facts. "
+            "Preserve the original evidence."
         ),
     }

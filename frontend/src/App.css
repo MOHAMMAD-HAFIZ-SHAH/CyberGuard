@@ -691,3 +691,58 @@ footer {
   outline: 3px solid #82b4ed;
   outline-offset: 3px;
 }
+
+/* Keep dashboard content and long AI-analysis output inside its cards. */
+.dashboard-section,
+.evidence-card,
+.report-section {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dashboard-section > *,
+.evidence-card > *,
+.report-section > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dashboard-section h3,
+.evidence-card h4,
+.report-section h3 {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.dashboard-section pre,
+.evidence-card pre,
+.report-section pre {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow-x: auto;
+  tab-size: 2;
+}
+
+.evidence-card {
+  overflow: hidden;
+}
+
+@media (max-width: 760px) {
+  .panel,
+  .dashboard-section {
+    padding: 18px;
+  }
+
+  .dashboard-section pre,
+  .evidence-card pre,
+  .report-section pre {
+    font-size: 12px;
+  }
+}
