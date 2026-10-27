@@ -222,6 +222,131 @@ function HypothesisCard({ hypothesis }) {
   );
 }
 
+function CrewAIReview({ review }) {
+  if (!review || typeof review !== "object") {
+    return (
+      <p className="empty-state">
+        No CrewAI investigation review was returned by the backend.
+      </p>
+    );
+  }
+
+  const status = String(review.status || "unknown").toLowerCase();
+  const analysis = review.analysis || review.review || "";
+  const warnings = Array.isArray(review.validation_warnings)
+    ? review.validation_warnings
+    : [];
+  const missingSections = Array.isArray(review.missing_sections)
+    ? review.missing_sections
+    : [];
+
+  return (
+    <div className="crewai-review">
+      <div className="review-status-row">
+        <span className={`severity severity-${status}`}>
+          {status.replaceAll("_", " ")}
+        </span>
+        <span className="muted">
+          Evidence reviewed: {displayValue(review.evidence_reviewed, "Unknown")}
+        </span>
+        <span className="muted">
+          Runtime: {Number.isFinite(Number(review.duration_seconds))
+            ? `${Number(review.duration_seconds).toFixed(2)} s`
+            : "Not available"}
+        </span>
+      </div>
+
+      {review.warning && (
+        <p className="warning-message" role="status">{review.warning}</p>
+      )}
+
+      {missingSections.length > 0 && (
+        <p className="warning-message">
+          Missing sections: {missingSections.join(", ")}
+        </p>
+      )}
+
+      {warnings.length > 0 && (
+        <ul className="review-warnings">
+          {warnings.map((warning, index) => (
+            <li key={index}>{displayValue(warning)}</li>
+          ))}
+        </ul>
+      )}
+
+      {analysis ? (
+        <pre className="crewai-analysis">{analysis}</pre>
+      ) : (
+        <p className="empty-state">CrewAI did not return analysis text.</p>
+      )}
+
+      <p className="muted">
+        AI-generated interpretations are not verified forensic facts. Validate
+        conclusions against original evidence.
+      </p>
+    </div>
+  );
+}
+
+function MonitoringPanel({ monitoring }) {
+  if (!monitoring || typeof monitoring !== "object") {
+    return <p className="empty-state">No monitoring metrics were returned.</p>;
+  }
+
+  const stages = Array.isArray(monitoring.stages) ? monitoring.stages : [];
+  return (
+    <div className="monitoring-panel">
+      <div className="stats-grid monitoring-stats">
+        <article className="stat-card">
+          <span>Total runtime</span>
+          <strong>{Number.isFinite(Number(monitoring.total_runtime_seconds))
+            ? `${Number(monitoring.total_runtime_seconds).toFixed(2)} s`
+            : "N/A"}</strong>
+        </article>
+        <article className="stat-card">
+          <span>Stages</span>
+          <strong>{displayValue(monitoring.stage_count, stages.length)}</strong>
+        </article>
+        <article className="stat-card">
+          <span>Incomplete stages</span>
+          <strong>{displayValue(monitoring.incomplete_stage_count, 0)}</strong>
+        </article>
+        <article className="stat-card">
+          <span>Failed stages</span>
+          <strong>{displayValue(monitoring.failed_stage_count, 0)}</strong>
+        </article>
+      </div>
+
+      <p className="muted">
+        Model: {displayValue(monitoring.model)} · Base URL: {displayValue(monitoring.base_url)}
+      </p>
+      {monitoring.cost_estimate == null && (
+        <p className="muted">Cost estimate: unavailable/not configured for this local run.</p>
+      )}
+      {stages.length > 0 && (
+        <div className="table-scroll">
+          <table className="monitoring-table">
+            <thead>
+              <tr><th>Stage</th><th>Status</th><th>Duration</th></tr>
+            </thead>
+            <tbody>
+              {stages.map((stage, index) => (
+                <tr key={stage.name || stage.stage || index}>
+                  <td>{displayValue(stage.name || stage.stage, `Stage ${index + 1}`)}</td>
+                  <td>{displayValue(stage.status, "unknown")}</td>
+                  <td>{Number.isFinite(Number(stage.duration_seconds))
+                    ? `${Number(stage.duration_seconds).toFixed(2)} s`
+                    : "N/A"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -716,14 +841,31 @@ ${section("6. Investigative Hypotheses", hypothesesHtml)}
 ${section("7. Forensic Artifact Analysis", analysesHtml)}
 
 ${section(
-  "8. Unified Investigation Report",
+  "8. CrewAI Investigation Review",
+  `<p><b>Status:</b> ${safe(result.crewai_review?.status ?? result.crewai_analysis?.status, "Not available")}</p>
+   <p><b>Evidence reviewed:</b> ${safe(result.crewai_review?.evidence_reviewed ?? result.crewai_analysis?.evidence_reviewed, "Not available")}</p>
+   <pre>${safe(result.crewai_review?.analysis ?? result.crewai_review?.review ?? result.crewai_analysis?.analysis ?? "No CrewAI analysis was returned.")}</pre>
+   <p><b>Warning:</b> ${safe(result.crewai_review?.warning ?? result.crewai_analysis?.warning, "None reported")}</p>`
+)}
+
+${section(
+  "9. Monitoring and Evaluation",
+  `<p><b>Total runtime:</b> ${safe(result.monitoring?.total_runtime_seconds, "Not available")} seconds</p>
+   <p><b>Stage count:</b> ${safe(result.monitoring?.stage_count, "Not available")}</p>
+   <p><b>Failed stages:</b> ${safe(result.monitoring?.failed_stage_count, "Not available")}</p>
+   <p><b>Incomplete stages:</b> ${safe(result.monitoring?.incomplete_stage_count, "Not available")}</p>
+   <pre>${safe(result.monitoring?.stages ?? "No stage metrics returned.")}</pre>`
+)}
+
+${section(
+  "10. Unified Investigation Report",
   `<pre>${originalReport}</pre>`
 )}
 
-${section("9. Collection Warnings", warningsHtml)}
+${section("11. Collection Warnings", warningsHtml)}
 
 ${section(
-  "10. Limitations and Professional Review",
+  "12. Limitations and Professional Review",
   `<div class="disclaimer">
     <p>This report reflects the data returned by CyberGuard at the time
     of generation. It does not independently certify the authenticity,
@@ -806,6 +948,8 @@ ${section(
 
   const summary = result?.evidence_summary || {};
   const severityCounts = summary.by_severity || {};
+  const crewaiReview = result?.crewai_review || result?.crewai_analysis || null;
+  const monitoring = result?.monitoring || null;
 
   const filteredEvidence = evidence.filter((item) => {
     const query = evidenceSearch.trim().toLowerCase();
@@ -1096,6 +1240,23 @@ ${section(
               <strong>{severityCounts.critical || 0}</strong>
             </article>
           </div>
+
+          <section className="dashboard-section">
+            <h3>CrewAI Investigation Review</h3>
+            <p className="muted">
+              Evidence-led interpretation with explicit validation status.
+            </p>
+            <CrewAIReview review={crewaiReview} />
+          </section>
+
+          <section className="dashboard-section">
+            <h3>Monitoring and Evaluation</h3>
+            <p className="muted">
+              Runtime and stage status for this investigation. These metrics
+              describe execution and do not establish forensic conclusions.
+            </p>
+            <MonitoringPanel monitoring={monitoring} />
+          </section>
 
           {investigationPlan.length > 0 && (
             <section className="dashboard-section">
