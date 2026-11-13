@@ -14,6 +14,10 @@ from backend.app.agents.verification_agent import verify_hypotheses
 from backend.app.agents.contradiction_agent import find_contradictions
 from backend.app.agents.timeline_agent import create_timeline
 from backend.app.agents.report_agent import generate_report
+from backend.app.agents.forensic_agent import analyze_forensic_evidence
+from backend.app.agents.threat_agent import map_known_patterns
+from backend.app.agents.endpoint_agent import analyze_endpoint_evidence
+from backend.app.core.crew_agents import run_crew_agent
 
 from backend.app.core.evidence_manager import summarize_evidence
 from backend.app.core.crewai_investigator import (
@@ -120,6 +124,25 @@ def _run_stage(
         )
 
     return result
+
+
+def _agent_stage(
+    stages: list[dict[str, Any]],
+    agent_runs: list[dict[str, Any]],
+    stage_name: str,
+    agent_name: str,
+    function: Callable[[], Any],
+    context: str = "",
+) -> Any:
+    """Run a stage through its CrewAI agent and record the agent's run."""
+
+    def operation() -> Any:
+        result, run_info = run_crew_agent(agent_name, function, context)
+        run_info["stage"] = stage_name
+        agent_runs.append(run_info)
+        return result
+
+    return _run_stage(stages, stage_name, operation)
 
 
 def _collect_image_artifacts(
@@ -252,15 +275,18 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
     """
     total_started = time.perf_counter()
     stages: list[dict[str, Any]] = []
+    agent_runs: list[dict[str, Any]] = []
     incident_id = str(uuid.uuid4())
 
     try:
         if isinstance(request, dict):
             request = IncidentRequest(**request)
 
-        case = _run_stage(
+        case = _agent_stage(
             stages,
+            agent_runs,
             "case_creation",
+            "case_manager",
             lambda: create_case(
                 request.title,
                 request.description,
@@ -268,18 +294,22 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             ),
         )
 
-        plan = _run_stage(
+        plan = _agent_stage(
             stages,
+            agent_runs,
             "investigation_planning",
+            "planner",
             lambda: create_investigation_plan(
                 request.description,
                 request.log_text,
             ),
         )
 
-        log_evidence = _run_stage(
+        log_evidence = _agent_stage(
             stages,
+            agent_runs,
             "log_analysis",
+            "log_agent",
             lambda: investigate_logs(request.log_text),
         )
 
@@ -447,27 +477,59 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                 analyze_artifacts,
             )
 
-        hypotheses = _run_stage(
+        forensic_findings = _agent_stage(
             stages,
+            agent_runs,
+            "forensic_indicator_analysis",
+            "forensic_agent",
+            lambda: analyze_forensic_evidence(evidence),
+        )
+
+        endpoint_findings = _agent_stage(
+            stages,
+            agent_runs,
+            "endpoint_analysis",
+            "endpoint_agent",
+            lambda: analyze_endpoint_evidence(evidence),
+        )
+
+        threat_findings = _agent_stage(
+            stages,
+            agent_runs,
+            "threat_pattern_mapping",
+            "threat_agent",
+            lambda: map_known_patterns(evidence),
+        )
+
+        hypotheses = _agent_stage(
+            stages,
+            agent_runs,
             "hypothesis_generation",
+            "hypothesis_agent",
             lambda: generate_hypotheses(evidence),
         )
 
-        hypotheses = _run_stage(
+        hypotheses = _agent_stage(
             stages,
+            agent_runs,
             "hypothesis_verification",
+            "verification_agent",
             lambda: verify_hypotheses(hypotheses, evidence),
         )
 
-        hypotheses = _run_stage(
+        hypotheses = _agent_stage(
             stages,
+            agent_runs,
             "contradiction_analysis",
+            "contradiction_agent",
             lambda: find_contradictions(hypotheses, evidence),
         )
 
-        timeline = _run_stage(
+        timeline = _agent_stage(
             stages,
+            agent_runs,
             "timeline_creation",
+            "timeline_agent",
             lambda: create_timeline(evidence),
         )
 
@@ -484,9 +546,11 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             ),
         )
 
-        report = _run_stage(
+        report = _agent_stage(
             stages,
+            agent_runs,
             "report_generation",
+            "report_agent",
             lambda: generate_report(
                 request.title,
                 request.description,
@@ -545,6 +609,12 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             "report": report,
             "forensic_artifact_analyses": artifact_analyses,
             "crewai_review": crewai_review,
+            "crew_agents": agent_runs,
+            "agent_findings": {
+                "forensic": forensic_findings,
+                "endpoint": endpoint_findings,
+                "threat": threat_findings,
+            },
             "collection_errors": collection_errors,
             "monitoring": {
                 "total_runtime_seconds": total_runtime,
@@ -552,7 +622,7 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                 "stage_count": len(stages),
                 "failed_stage_count": failed_stage_count,
                 "incomplete_stage_count": incomplete_stage_count,
-                "model": os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+                "model": os.getenv("OLLAMA_MODEL", "mistral:latest"),
                 "ollama_base_url": os.getenv(
                     "OLLAMA_BASE_URL",
                     "http://127.0.0.1:11434",

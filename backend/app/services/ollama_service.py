@@ -1,12 +1,13 @@
 
 import hashlib
 import json
+import os
 import re
 import urllib.error
 import urllib.request
 
-OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-OLLAMA_MODEL = "qwen2.5:3b"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
 
 REQUEST_TIMEOUT_SECONDS = 180
 MAX_EVIDENCE_CHARS = 10000
