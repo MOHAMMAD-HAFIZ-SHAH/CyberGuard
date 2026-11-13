@@ -1,22 +1,21 @@
 
-from typing import Any
+from backend.app.models.hypothesis import Hypothesis
+from backend.app.models.evidence import Evidence
 
 
-def generate_hypotheses(evidence: list[dict]) -> list[dict]:
-    """
-    Generate evidence-linked investigative hypotheses.
+def generate_hypotheses(
+    evidence: list[dict | Evidence],
+) -> list[Hypothesis]:
 
-    These are rule-based investigative leads, not proof of an incident.
-    Confidence values are heuristic scores, not calibrated probabilities.
-    """
+    hypotheses: list[Hypothesis] = []
 
-    hypotheses: list[dict[str, Any]] = []
+    valid_evidence = []
 
-    # Ignore malformed evidence records instead of crashing.
-    valid_evidence = [
-        item for item in evidence
-        if isinstance(item, dict)
-    ]
+    for item in evidence:
+        if isinstance(item, Evidence):
+            valid_evidence.append(item.model_dump())
+        elif isinstance(item, dict):
+            valid_evidence.append(Evidence(**item).model_dump())
 
     def matching(event_type: str) -> list[dict]:
         return [
@@ -37,21 +36,23 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
         supporting_items: list[dict],
         confidence: float,
     ) -> None:
-        """Add a hypothesis only when it has evidence references."""
+
         references = evidence_ids(supporting_items)
+
         if not references:
             return
 
-        hypotheses.append({
-            "hypothesis_id": hypothesis_id,
-            "description": description,
-            "supporting_evidence": references,
-            "contradicting_evidence": [],
-            "confidence": confidence,
-            "status": "requires_review",
-        })
+        hypotheses.append(
+            Hypothesis(
+                hypothesis_id=hypothesis_id,
+                description=description,
+                supporting_evidence=references,
+                contradicting_evidence=[],
+                confidence=confidence,
+                status="requires_review",
+            )
+        )
 
-    # Collect existing event categories.
     failed_logins = matching("failed_login")
     successful_logins = matching("successful_login")
     malware_events = matching("malware_detection")
@@ -59,7 +60,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
     data_transfers = matching("possible_data_transfer")
     filesystem_artifacts = matching("filesystem_artifact")
 
-    # New FTP-related categories from log_tools.py.
     ftp_connections = matching("ftp_connection_opened")
     credential_events = matching("credential_related_activity")
     ftp_uploads = matching("ftp_file_upload")
@@ -67,7 +67,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
     connection_closures = matching("connection_closed")
     logouts = matching("logout")
 
-    # HYP-001: repeated failed logins.
     if len(failed_logins) >= 3:
         add_hypothesis(
             "HYP-001",
@@ -78,7 +77,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.65,
         )
 
-    # HYP-002: failed logins and a successful login.
     if failed_logins and successful_logins:
         add_hypothesis(
             "HYP-002",
@@ -90,7 +88,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.55,
         )
 
-    # HYP-003: malware-related alert.
     if malware_events:
         add_hypothesis(
             "HYP-003",
@@ -101,7 +98,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.75,
         )
 
-    # HYP-004: suspicious command execution.
     if suspicious_commands:
         add_hypothesis(
             "HYP-004",
@@ -112,7 +108,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.60,
         )
 
-    # HYP-005: possible data movement from existing transfer rules.
     if data_transfers:
         add_hypothesis(
             "HYP-005",
@@ -124,8 +119,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.50,
         )
 
-    # HYP-006: filesystem artifacts contain potentially sensitive data.
-    # Do not copy artifact contents into hypothesis descriptions.
     sensitive_terms = (
         "password",
         "passwd",
@@ -144,6 +137,7 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
 
     for item in filesystem_artifacts:
         metadata = item.get("metadata", {})
+
         if not isinstance(metadata, dict):
             metadata = {}
 
@@ -170,7 +164,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.50,
         )
 
-    # HYP-007: filesystem artifacts reference network services.
     network_terms = (
         "ftp://",
         "sftp://",
@@ -186,6 +179,7 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
 
     for item in filesystem_artifacts:
         metadata = item.get("metadata", {})
+
         if not isinstance(metadata, dict):
             metadata = {}
 
@@ -210,11 +204,10 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.45,
         )
 
-    # HYP-008: artifact exists but has no matching rule.
     classified_ids = {
         evidence_id
         for hypothesis in hypotheses
-        for evidence_id in hypothesis["supporting_evidence"]
+        for evidence_id in hypothesis.supporting_evidence
     }
 
     unclassified_artifacts = [
@@ -237,10 +230,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.30,
         )
 
-    # HYP-009: FTP connection and file-transfer activity.
-    #
-    # A connection or upload command is not proof that the transfer
-    # succeeded. Include the closure event as context, not confirmation.
     transfer_activity = (
         ftp_connections
         + ftp_uploads
@@ -279,7 +268,6 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.45,
         )
 
-    # HYP-010: credential-related indicator associated with FTP activity.
     if credential_events and (
         ftp_connections or ftp_uploads or ftp_downloads
     ):
@@ -312,13 +300,11 @@ def generate_hypotheses(evidence: list[dict]) -> list[dict]:
             0.40,
         )
 
-    # HYP-011: connection closure or logout provides session context.
-    #
-    # These events do not prove a transfer completed or that a session
-    # was malicious.
     session_events = connection_closures + logouts
 
-    if session_events and (ftp_connections or ftp_uploads or ftp_downloads):
+    if session_events and (
+        ftp_connections or ftp_uploads or ftp_downloads
+    ):
         add_hypothesis(
             "HYP-011",
             "Connection closure or logout events provide context for the "

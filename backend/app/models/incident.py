@@ -1,6 +1,11 @@
 
+from typing import Optional, Any
+
 from pydantic import BaseModel, Field
-from typing import Optional
+
+from backend.app.models.evidence import Evidence
+from backend.app.models.hypothesis import Hypothesis
+from backend.app.models.timeline import TimelineEvent
 
 
 class IncidentRequest(BaseModel):
@@ -23,8 +28,25 @@ class IncidentResult(BaseModel):
     incident_id: str
     title: str
     status: str
-    investigation_plan: list[str]
-    evidence: list[dict]
-    hypotheses: list[dict]
-    timeline: list[dict]
+
+    investigation_plan: list[str] = Field(default_factory=list)
+
+    evidence: list[Evidence] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    timeline: list[TimelineEvent] = Field(default_factory=list)
+
     report: str
+
+    evidence_summary: Optional[Any] = None
+    forensic_artifact_analyses: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
+    crewai_review: Optional[Any] = None
+    crew_agents: list[dict[str, Any]] = Field(default_factory=list)
+
+    agent_findings: dict[str, Any] = Field(default_factory=dict)
+    collection_errors: list[dict[str, Any]] = Field(default_factory=list)
+
+    monitoring: dict[str, Any] = Field(default_factory=dict)
+
+    note: Optional[str] = None

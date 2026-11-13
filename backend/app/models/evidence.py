@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Literal, Any
 
 
 class Evidence(BaseModel):
@@ -8,6 +8,6 @@ class Evidence(BaseModel):
     timestamp: Optional[str] = None
     event_type: str
     description: str
-    severity: str = "low"
+    severity: Literal["low", "medium", "high", "critical"] = "low"
     supporting: bool = False
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)

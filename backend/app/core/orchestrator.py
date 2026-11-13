@@ -18,14 +18,12 @@ from backend.app.agents.forensic_agent import analyze_forensic_evidence
 from backend.app.agents.threat_agent import map_known_patterns
 from backend.app.agents.endpoint_agent import analyze_endpoint_evidence
 from backend.app.core.crew_agents import run_crew_agent
-
 from backend.app.core.evidence_manager import summarize_evidence
-from backend.app.core.crewai_investigator import (
-    review_investigation_with_crew,
-)
+from backend.app.core.crewai_investigator import review_investigation_with_crew
 
-from backend.app.models.incident import IncidentRequest
+from backend.app.models.incident import IncidentRequest, IncidentResult
 from backend.app.models.evidence import Evidence
+from backend.app.models.hypothesis import Hypothesis
 
 from backend.app.services.tsk_service import (
     list_filesystem_entries,
@@ -53,8 +51,6 @@ SUPPORTED_TEXT_EXTENSIONS = {
     ".cfg",
 }
 
-# These statuses indicate that a stage returned a result but did not
-# finish successfully. They are different from an unhandled exception.
 NON_SUCCESS_RESULT_STATUSES = {"failed", "incomplete"}
 
 
@@ -63,7 +59,6 @@ def _run_stage(
     stage_name: str,
     operation: Callable[[], Any],
 ) -> Any:
-    """Run a stage and record its status and execution duration."""
     started = time.perf_counter()
 
     record = {
@@ -71,10 +66,12 @@ def _run_stage(
         "status": "running",
         "duration_seconds": None,
     }
+
     stages.append(record)
 
     try:
         result = operation()
+
     except Exception as error:
         record["status"] = "failed"
         record["duration_seconds"] = round(
@@ -82,16 +79,14 @@ def _run_stage(
         )
         record["error_type"] = type(error).__name__
 
-        # Never log evidence contents, credentials, or exception messages.
         logger.error(
             "Investigation stage failed: stage=%s error_type=%s",
             stage_name,
             type(error).__name__,
         )
+
         raise
 
-    # Some operations return a result dictionary describing their own
-    # status instead of raising an exception. Respect that status.
     result_status = (
         result.get("status")
         if isinstance(result, dict)
@@ -109,8 +104,7 @@ def _run_stage(
 
     if record["status"] == "completed":
         logger.info(
-            "Investigation stage completed: stage=%s "
-            "duration_seconds=%.4f",
+            "Investigation stage completed: stage=%s duration_seconds=%.4f",
             stage_name,
             record["duration_seconds"],
         )
@@ -134,25 +128,62 @@ def _agent_stage(
     function: Callable[[], Any],
     context: str = "",
 ) -> Any:
-    """Run a stage through its CrewAI agent and record the agent's run."""
 
     def operation() -> Any:
-        result, run_info = run_crew_agent(agent_name, function, context)
+        result, run_info = run_crew_agent(
+            agent_name,
+            function,
+            context,
+        )
+
         run_info["stage"] = stage_name
         agent_runs.append(run_info)
+
         return result
 
     return _run_stage(stages, stage_name, operation)
 
 
+def _validate_evidence(items: list[Any]) -> list[dict[str, Any]]:
+    validated = []
+
+    for item in items:
+        if isinstance(item, Evidence):
+            validated.append(item.model_dump())
+
+        elif isinstance(item, dict):
+            validated.append(Evidence(**item).model_dump())
+
+        else:
+            raise ValueError(
+                "Unsupported evidence type returned by an agent."
+            )
+
+    return validated
+
+
+def _validate_hypotheses(items: list[Any]) -> list[dict[str, Any]]:
+    validated = []
+
+    for item in items:
+        if isinstance(item, Hypothesis):
+            validated.append(item.model_dump())
+
+        elif isinstance(item, dict):
+            validated.append(Hypothesis(**item).model_dump())
+
+        else:
+            raise ValueError(
+                "Unsupported hypothesis type returned by an agent."
+            )
+
+    return validated
+
+
 def _collect_image_artifacts(
     image_path: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """
-    Collect a bounded number of supported text artifacts using TSK.
 
-    No event timestamps are inferred from collection time or filenames.
-    """
     image = Path(image_path).expanduser()
 
     if not image.is_absolute():
@@ -167,10 +198,11 @@ def _collect_image_artifacts(
             "The Sleuth Kit could not list filesystem entries."
         )
 
-    collected: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
+    collected = []
+    errors = []
 
     for line in listing.get("stdout", "").splitlines():
+
         if len(collected) >= MAX_ARTIFACTS_PER_IMAGE:
             break
 
@@ -178,11 +210,14 @@ def _collect_image_artifacts(
             prefix, file_name = line.split(":", 1)
             prefix = prefix.strip()
             file_name = file_name.strip()
+
         except ValueError:
             continue
 
-        # Process regular files only.
         if not prefix.startswith(("r/r ", "r/- ", "r/* ")):
+            continue
+
+        if Path(file_name).suffix.lower() not in SUPPORTED_TEXT_EXTENSIONS:
             continue
 
         address_parts = prefix.split()
@@ -198,14 +233,12 @@ def _collect_image_artifacts(
 
         try:
             metadata_address = int(address_text)
+
         except ValueError:
             errors.append({
                 "path": file_name,
                 "error": "Invalid TSK metadata address.",
             })
-            continue
-
-        if Path(file_name).suffix.lower() not in SUPPORTED_TEXT_EXTENSIONS:
             continue
 
         try:
@@ -235,6 +268,7 @@ def _collect_image_artifacts(
 
             try:
                 text_content = content.decode("utf-8")
+
             except UnicodeDecodeError:
                 errors.append({
                     "metadata_address": metadata_address,
@@ -257,6 +291,7 @@ def _collect_image_artifacts(
             RuntimeError,
             TimeoutError,
         ) as error:
+
             errors.append({
                 "metadata_address": metadata_address,
                 "path": file_name,
@@ -266,21 +301,24 @@ def _collect_image_artifacts(
     return collected, errors
 
 
-def run_investigation(request: IncidentRequest | dict) -> dict:
-    """
-    Run a CyberGuard investigation and record stage-level monitoring.
+def run_investigation(
+    request: IncidentRequest | dict,
+) -> dict:
 
-    Original evidence, deterministic checks, and AI interpretations
-    remain distinguishable.
-    """
     total_started = time.perf_counter()
-    stages: list[dict[str, Any]] = []
-    agent_runs: list[dict[str, Any]] = []
+
+    stages = []
+    agent_runs = []
+
     incident_id = str(uuid.uuid4())
 
     try:
+
         if isinstance(request, dict):
             request = IncidentRequest(**request)
+
+        elif not isinstance(request, IncidentRequest):
+            raise TypeError("Invalid incident request type.")
 
         case = _agent_stage(
             stages,
@@ -313,40 +351,26 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             lambda: investigate_logs(request.log_text),
         )
 
-        def normalize_evidence() -> list[dict[str, Any]]:
-            normalized = []
-
-            for item in log_evidence:
-                if isinstance(item, Evidence):
-                    normalized.append(item.model_dump())
-                elif isinstance(item, dict):
-                    normalized.append(dict(item))
-                else:
-                    raise ValueError(
-                        "The log agent returned an unsupported evidence type."
-                    )
-
-            return normalized
-
         evidence = _run_stage(
             stages,
             "evidence_normalization",
-            normalize_evidence,
+            lambda: _validate_evidence(log_evidence),
         )
 
-        artifact_analyses: list[dict[str, Any]] = []
-        collection_errors: list[dict[str, Any]] = []
-        artifacts: list[dict[str, Any]] = []
+        artifact_analyses = []
+        collection_errors = []
+        artifacts = []
 
-        # Optionally collect artifacts from a forensic image.
         if request.image_path:
 
-            def collect_artifacts() -> list[dict[str, Any]]:
+            def collect_artifacts():
                 try:
                     found, extraction_errors = _collect_image_artifacts(
                         request.image_path
                     )
+
                     collection_errors.extend(extraction_errors)
+
                     return found
 
                 except (
@@ -355,12 +379,12 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                     RuntimeError,
                     TimeoutError,
                 ) as error:
+
                     collection_errors.append({
                         "path": request.image_path,
-                        "error": (
-                            f"Collection failed: {type(error).__name__}"
-                        ),
+                        "error": f"Collection failed: {type(error).__name__}",
                     })
+
                     return []
 
             artifacts = _run_stage(
@@ -369,8 +393,10 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                 collect_artifacts,
             )
 
-            def register_artifacts() -> None:
+            def register_artifacts():
+
                 for artifact in artifacts:
+
                     metadata_address = artifact["metadata_address"]
                     artifact_path = artifact["path"]
                     image_name = artifact["image_name"]
@@ -380,32 +406,30 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                         f"{Path(artifact_path).name}"
                     )
 
-                    # Preserve extracted evidence. Monitoring logs never
-                    # contain original artifact text.
-                    evidence.append(
-                        Evidence(
-                            evidence_id=artifact_id,
-                            source=f"{image_name} :: {artifact_path}",
-                            timestamp=None,
-                            event_type="filesystem_artifact",
-                            description=(
-                                "Text artifact extracted from a forensic image. "
-                                "The content requires investigator review."
+                    artifact_evidence = Evidence(
+                        evidence_id=artifact_id,
+                        source=f"{image_name} :: {artifact_path}",
+                        timestamp=None,
+                        event_type="filesystem_artifact",
+                        description=(
+                            "Text artifact extracted from a forensic image. "
+                            "The content requires investigator review."
+                        ),
+                        severity="low",
+                        supporting=False,
+                        metadata={
+                            "image_name": image_name,
+                            "path": artifact_path,
+                            "metadata_address": metadata_address,
+                            "size_bytes": artifact["size_bytes"],
+                            "text_content": artifact["text"],
+                            "timestamp_note": (
+                                "No original event timestamp was inferred."
                             ),
-                            severity="low",
-                            supporting=False,
-                            metadata={
-                                "image_name": image_name,
-                                "path": artifact_path,
-                                "metadata_address": metadata_address,
-                                "size_bytes": artifact["size_bytes"],
-                                "text_content": artifact["text"],
-                                "timestamp_note": (
-                                    "No original event timestamp was inferred."
-                                ),
-                            },
-                        ).model_dump()
+                        },
                     )
+
+                    evidence.append(artifact_evidence.model_dump())
 
             _run_stage(
                 stages,
@@ -413,8 +437,10 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                 register_artifacts,
             )
 
-            def analyze_artifacts() -> None:
+            def analyze_artifacts():
+
                 for artifact in artifacts:
+
                     metadata_address = artifact["metadata_address"]
                     artifact_path = artifact["path"]
                     image_name = artifact["image_name"]
@@ -443,10 +469,8 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                             ),
                             "warning": ai_result.get(
                                 "warning",
-                                (
-                                    "AI-generated interpretation. "
-                                    "Validate against the original evidence."
-                                ),
+                                "AI-generated interpretation. "
+                                "Validate against the original evidence.",
                             ),
                         })
 
@@ -455,12 +479,12 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                         RuntimeError,
                         TimeoutError,
                     ) as error:
+
                         collection_errors.append({
                             "metadata_address": metadata_address,
                             "path": artifact_path,
                             "error": (
-                                "AI analysis failed: "
-                                f"{type(error).__name__}"
+                                f"AI analysis failed: {type(error).__name__}"
                             ),
                         })
 
@@ -509,6 +533,12 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             lambda: generate_hypotheses(evidence),
         )
 
+        hypotheses = _run_stage(
+            stages,
+            "hypothesis_validation",
+            lambda: _validate_hypotheses(hypotheses),
+        )
+
         hypotheses = _agent_stage(
             stages,
             agent_runs,
@@ -517,12 +547,24 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             lambda: verify_hypotheses(hypotheses, evidence),
         )
 
+        hypotheses = _run_stage(
+            stages,
+            "verified_hypothesis_validation",
+            lambda: _validate_hypotheses(hypotheses),
+        )
+
         hypotheses = _agent_stage(
             stages,
             agent_runs,
             "contradiction_analysis",
             "contradiction_agent",
             lambda: find_contradictions(hypotheses, evidence),
+        )
+
+        hypotheses = _run_stage(
+            stages,
+            "final_hypothesis_validation",
+            lambda: _validate_hypotheses(hypotheses),
         )
 
         timeline = _agent_stage(
@@ -566,21 +608,26 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             lambda: summarize_evidence(evidence),
         )
 
-        total_runtime = round(time.perf_counter() - total_started, 4)
+        total_runtime = round(
+            time.perf_counter() - total_started, 4
+        )
 
         failed_stage_count = sum(
-            stage["status"] == "failed" for stage in stages
-        )
-        incomplete_stage_count = sum(
-            stage["status"] == "incomplete" for stage in stages
+            stage["status"] == "failed"
+            for stage in stages
         )
 
-        # Keep the overall investigation status separate from the AI review
-        # status. An incomplete AI review does not erase valid evidence.
+        incomplete_stage_count = sum(
+            stage["status"] == "incomplete"
+            for stage in stages
+        )
+
         if failed_stage_count:
             overall_status = "completed_with_errors"
+
         elif incomplete_stage_count:
             overall_status = "completed_with_warnings"
+
         else:
             overall_status = "completed"
 
@@ -596,8 +643,24 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             total_runtime,
         )
 
-        # Preserve the existing response fields for frontend compatibility.
-        return {
+        monitoring = {
+            "total_runtime_seconds": total_runtime,
+            "stages": stages,
+            "stage_count": len(stages),
+            "failed_stage_count": failed_stage_count,
+            "incomplete_stage_count": incomplete_stage_count,
+            "model": os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+            "ollama_base_url": os.getenv(
+                "OLLAMA_BASE_URL",
+                "http://127.0.0.1:11434",
+            ),
+            "estimated_cost": None,
+            "estimated_cost_note": (
+                "Cost is not measured by this local Ollama workflow."
+            ),
+        }
+
+        result_data = {
             "incident_id": incident_id,
             "title": case["title"],
             "status": overall_status,
@@ -616,22 +679,7 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
                 "threat": threat_findings,
             },
             "collection_errors": collection_errors,
-            "monitoring": {
-                "total_runtime_seconds": total_runtime,
-                "stages": stages,
-                "stage_count": len(stages),
-                "failed_stage_count": failed_stage_count,
-                "incomplete_stage_count": incomplete_stage_count,
-                "model": os.getenv("OLLAMA_MODEL", "mistral:latest"),
-                "ollama_base_url": os.getenv(
-                    "OLLAMA_BASE_URL",
-                    "http://127.0.0.1:11434",
-                ),
-                "estimated_cost": None,
-                "estimated_cost_note": (
-                    "Cost is not measured by this local Ollama workflow."
-                ),
-            },
+            "monitoring": monitoring,
             "note": (
                 "Rule-based and AI-assisted findings require human validation. "
                 "AI interpretations are not verified forensic facts. "
@@ -639,8 +687,32 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             ),
         }
 
+        result = IncidentResult(
+            incident_id=incident_id,
+            title=result_data["title"],
+            status=result_data["status"],
+            investigation_plan=result_data["investigation_plan"],
+            evidence=evidence,
+            hypotheses=hypotheses,
+            timeline=timeline,
+            report=report,
+        )
+
+        validated_result = result.model_dump()
+
+        validated_result.update({
+            key: value
+            for key, value in result_data.items()
+            if key not in validated_result
+        })
+
+        return validated_result
+
     except Exception as error:
-        total_runtime = round(time.perf_counter() - total_started, 4)
+
+        total_runtime = round(
+            time.perf_counter() - total_started, 4
+        )
 
         logger.error(
             "Investigation failed: incident_id=%s error_type=%s "
@@ -649,4 +721,5 @@ def run_investigation(request: IncidentRequest | dict) -> dict:
             type(error).__name__,
             total_runtime,
         )
+
         raise
