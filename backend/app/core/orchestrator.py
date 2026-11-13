@@ -698,15 +698,9 @@ def run_investigation(
             report=report,
         )
 
-        validated_result = result.model_dump()
+        validated_result = IncidentResult.model_validate(result_data)
 
-        validated_result.update({
-            key: value
-            for key, value in result_data.items()
-            if key not in validated_result
-        })
-
-        return validated_result
+        return validated_result.model_dump(mode="json")
 
     except Exception as error:
 

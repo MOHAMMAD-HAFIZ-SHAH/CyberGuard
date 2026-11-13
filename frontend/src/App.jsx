@@ -1,3 +1,4 @@
+
 import { useRef, useState } from "react";
 import "./App.css";
 
@@ -246,9 +247,11 @@ function CrewAIReview({ review }) {
         <span className={`severity severity-${status}`}>
           {status.replaceAll("_", " ")}
         </span>
+
         <span className="muted">
           Evidence reviewed: {displayValue(review.evidence_reviewed, "Unknown")}
         </span>
+
         <span className="muted">
           Runtime: {Number.isFinite(Number(review.duration_seconds))
             ? `${Number(review.duration_seconds).toFixed(2)} s`
@@ -257,7 +260,9 @@ function CrewAIReview({ review }) {
       </div>
 
       {review.warning && (
-        <p className="warning-message" role="status">{review.warning}</p>
+        <p className="warning-message" role="status">
+          {review.warning}
+        </p>
       )}
 
       {missingSections.length > 0 && (
@@ -277,7 +282,9 @@ function CrewAIReview({ review }) {
       {analysis ? (
         <pre className="crewai-analysis">{analysis}</pre>
       ) : (
-        <p className="empty-state">CrewAI did not return analysis text.</p>
+        <p className="empty-state">
+          CrewAI did not return analysis text.
+        </p>
       )}
 
       <p className="muted">
@@ -290,53 +297,103 @@ function CrewAIReview({ review }) {
 
 function MonitoringPanel({ monitoring }) {
   if (!monitoring || typeof monitoring !== "object") {
-    return <p className="empty-state">No monitoring metrics were returned.</p>;
+    return (
+      <p className="empty-state">
+        No monitoring metrics were returned.
+      </p>
+    );
   }
 
-  const stages = Array.isArray(monitoring.stages) ? monitoring.stages : [];
+  const stages = Array.isArray(monitoring.stages)
+    ? monitoring.stages
+    : [];
+
   return (
     <div className="monitoring-panel">
       <div className="stats-grid monitoring-stats">
         <article className="stat-card">
           <span>Total runtime</span>
-          <strong>{Number.isFinite(Number(monitoring.total_runtime_seconds))
-            ? `${Number(monitoring.total_runtime_seconds).toFixed(2)} s`
-            : "N/A"}</strong>
+          <strong>
+            {Number.isFinite(Number(monitoring.total_runtime_seconds))
+              ? `${Number(monitoring.total_runtime_seconds).toFixed(2)} s`
+              : "N/A"}
+          </strong>
         </article>
+
         <article className="stat-card">
           <span>Stages</span>
-          <strong>{displayValue(monitoring.stage_count, stages.length)}</strong>
+          <strong>
+            {displayValue(monitoring.stage_count, stages.length)}
+          </strong>
         </article>
+
         <article className="stat-card">
           <span>Incomplete stages</span>
-          <strong>{displayValue(monitoring.incomplete_stage_count, 0)}</strong>
+          <strong>
+            {displayValue(monitoring.incomplete_stage_count, 0)}
+          </strong>
         </article>
+
         <article className="stat-card">
           <span>Failed stages</span>
-          <strong>{displayValue(monitoring.failed_stage_count, 0)}</strong>
+          <strong>
+            {displayValue(monitoring.failed_stage_count, 0)}
+          </strong>
         </article>
       </div>
 
       <p className="muted">
-        Model: {displayValue(monitoring.model)} · Base URL: {displayValue(monitoring.base_url)}
+        Model: {displayValue(monitoring.model)} · Base URL:{" "}
+        {displayValue(
+          monitoring.ollama_base_url ?? monitoring.base_url
+        )}
       </p>
-      {monitoring.cost_estimate == null && (
-        <p className="muted">Cost estimate: unavailable/not configured for this local run.</p>
+
+      {monitoring.estimated_cost == null &&
+      monitoring.cost_estimate == null ? (
+        <p className="muted">
+          {displayValue(
+            monitoring.estimated_cost_note,
+            "Cost estimate: unavailable/not configured for this local run."
+          )}
+        </p>
+      ) : (
+        <p className="muted">
+          Estimated cost:{" "}
+          {displayValue(
+            monitoring.estimated_cost ?? monitoring.cost_estimate
+          )}
+        </p>
       )}
+
       {stages.length > 0 && (
         <div className="table-scroll">
           <table className="monitoring-table">
             <thead>
-              <tr><th>Stage</th><th>Status</th><th>Duration</th></tr>
+              <tr>
+                <th>Stage</th>
+                <th>Status</th>
+                <th>Duration</th>
+              </tr>
             </thead>
+
             <tbody>
               {stages.map((stage, index) => (
                 <tr key={stage.name || stage.stage || index}>
-                  <td>{displayValue(stage.name || stage.stage, `Stage ${index + 1}`)}</td>
+                  <td>
+                    {displayValue(
+                      stage.name || stage.stage,
+                      `Stage ${index + 1}`
+                    )}
+                  </td>
+
                   <td>{displayValue(stage.status, "unknown")}</td>
-                  <td>{Number.isFinite(Number(stage.duration_seconds))
-                    ? `${Number(stage.duration_seconds).toFixed(2)} s`
-                    : "N/A"}</td>
+
+                  <td>
+                    {Number.isFinite(Number(stage.duration_seconds))
+                      ? `${Number(stage.duration_seconds).toFixed(2)} s`
+                      : "N/A"}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -533,11 +590,9 @@ function App() {
     }
   }
 
-  // Download a professionally formatted, standalone HTML report.
   function downloadProfessionalReport() {
     if (!result) return;
 
-    // Escape dynamic content before inserting it into HTML.
     const escapeHtml = (value) =>
       String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -548,8 +603,6 @@ function App() {
 
     const safe = (value, fallback = "Not available") =>
       escapeHtml(displayValue(value, fallback));
-
-    const reportDate = new Date().toLocaleString();
 
     const reportEvidence = Array.isArray(result.evidence)
       ? result.evidence
@@ -576,6 +629,42 @@ function App() {
     const reportPlan = Array.isArray(result.investigation_plan)
       ? result.investigation_plan
       : [];
+
+    const reportDate = new Date().toLocaleString();
+
+    // Omit verbatim extracted artifact text from the general-purpose export.
+    // The original evidence remains preserved in the forensic evidence store.
+    const redactArtifactText = (value) => {
+      let text = String(value ?? "");
+
+      for (const item of reportEvidence) {
+        const rawText =
+          item?.metadata?.text_content ?? item?.text_content ?? "";
+
+        if (typeof rawText !== "string" || rawText.trim().length < 8) {
+          continue;
+        }
+
+        const escapedPattern = rawText
+          .trim()
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          .replace(/\s+/g, "\\s+");
+
+        try {
+          text = text.replace(
+            new RegExp(escapedPattern, "gi"),
+            "[ORIGINAL ARTIFACT TEXT OMITTED FROM GENERAL REPORT]"
+          );
+        } catch {
+          // Leave the narrative unchanged if a pattern cannot be constructed.
+        }
+      }
+
+      return text.replace(
+        /(Redacted text:\s*).*/gi,
+        "$1[content omitted from general report]"
+      );
+    };
 
     const section = (heading, content) => `
       <section class="report-section">
@@ -649,8 +738,9 @@ function App() {
 
             return `
               <article class="item">
-                <h3>Hypothesis ${index + 1}</h3>
+                <h3>${safe(item.hypothesis_id, `Hypothesis ${index + 1}`)}</h3>
                 <p>${safe(item.description)}</p>
+                <p><b>Status:</b> ${safe(item.status)}</p>
                 <p><b>Heuristic score:</b> ${
                   confidence === null
                     ? "Not provided"
@@ -677,7 +767,7 @@ function App() {
               <article class="item">
                 <h3>Artifact Analysis ${index + 1}</h3>
                 <p><b>Source:</b> ${safe(item.source)}</p>
-                <pre>${safe(item.ai_analysis ?? item)}</pre>
+                <pre>${safe(redactArtifactText(item.ai_analysis ?? item))}</pre>
               </article>
             `
           )
@@ -696,8 +786,59 @@ function App() {
           .join("")}</ul>`
       : "<p>No collection warnings were reported by the backend.</p>";
 
+    const crewReview =
+      result.crewai_review ?? result.crewai_analysis ?? null;
+
+    const crewReviewText =
+      crewReview && typeof crewReview === "object"
+        ? crewReview.analysis ??
+          crewReview.review ??
+          crewReview.raw ??
+          crewReview.final_output ??
+          ""
+        : typeof crewReview === "string"
+          ? crewReview
+          : "";
+
+    const monitoring = result.monitoring ?? {};
+
+    const monitoringStages = Array.isArray(monitoring.stages)
+      ? monitoring.stages
+      : [];
+
+    const monitoringStagesHtml = monitoringStages.length
+      ? `<div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>Status</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${monitoringStages
+                .map(
+                  (stage, index) => `
+                    <tr>
+                      <td>${safe(stage.stage ?? stage.name, `Stage ${index + 1}`)}</td>
+                      <td>${safe(stage.status, "unknown")}</td>
+                      <td>${
+                        Number.isFinite(Number(stage.duration_seconds))
+                          ? `${Number(stage.duration_seconds).toFixed(2)} s`
+                          : "N/A"
+                      }</td>
+                    </tr>
+                  `
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </div>`
+      : "<p>No stage metrics returned.</p>";
+
     const originalReport = safe(
-      result.report,
+      redactArtifactText(result.report),
       "No narrative report was returned."
     );
 
@@ -712,6 +853,7 @@ function App() {
 <title>CyberGuard Forensic Report</title>
 <style>
   * { box-sizing: border-box; }
+
   body {
     font-family: Arial, Helvetica, sans-serif;
     max-width: 900px;
@@ -721,18 +863,22 @@ function App() {
     line-height: 1.65;
     background: #fff;
   }
+
   header {
     border-bottom: 4px solid #163a63;
     padding-bottom: 22px;
     margin-bottom: 28px;
   }
+
   .brand {
     color: #163a63;
     font-size: 13px;
     font-weight: bold;
     letter-spacing: 2px;
   }
+
   h1 { font-size: 30px; margin-bottom: 6px; }
+
   h2 {
     color: #163a63;
     border-bottom: 1px solid #ccd5df;
@@ -740,13 +886,16 @@ function App() {
     margin-top: 32px;
     font-size: 20px;
   }
+
   h3 { font-size: 16px; }
+
   .metadata {
     background: #f3f6fa;
     padding: 16px 20px;
     border-radius: 6px;
     overflow-wrap: anywhere;
   }
+
   .item {
     border: 1px solid #d9e0e8;
     padding: 14px 18px;
@@ -755,6 +904,7 @@ function App() {
     break-inside: avoid;
     overflow-wrap: anywhere;
   }
+
   pre {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -762,11 +912,30 @@ function App() {
     padding: 14px;
     font: 12px/1.6 Consolas, monospace;
   }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+  }
+
+  th, td {
+    border: 1px solid #d9e0e8;
+    padding: 9px 12px;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  th {
+    background: #f3f6fa;
+  }
+
   .disclaimer {
     background: #fff8e7;
     border-left: 4px solid #b78120;
     padding: 14px;
   }
+
   .badge {
     display: inline-block;
     padding: 3px 9px;
@@ -774,6 +943,7 @@ function App() {
     border-radius: 4px;
     font-size: 12px;
   }
+
   footer {
     margin-top: 40px;
     padding-top: 14px;
@@ -781,6 +951,7 @@ function App() {
     color: #596579;
     font-size: 12px;
   }
+
   @media print {
     body { margin: 0; padding: 0; max-width: none; }
     .report-section { break-inside: auto; }
@@ -790,6 +961,7 @@ function App() {
   }
 </style>
 </head>
+
 <body>
 <header>
   <div class="brand">CYBERGUARD | DIGITAL FORENSICS</div>
@@ -805,12 +977,8 @@ function App() {
   <p><b>Report generated:</b> ${escapeHtml(reportDate)}</p>
   <p><b>Evidence items:</b> ${reportEvidence.length}</p>
   <p><b>Hypotheses:</b> ${reportHypotheses.length}</p>
-  <p><b>Critical findings:</b> ${safe(
-    severityCounts.critical ?? 0
-  )}</p>
-  <p><b>High-severity findings:</b> ${safe(
-    severityCounts.high ?? 0
-  )}</p>
+  <p><b>Critical findings:</b> ${safe(severityCounts.critical ?? 0)}</p>
+  <p><b>High-severity findings:</b> ${safe(severityCounts.high ?? 0)}</p>
 </div>
 
 ${section(
@@ -842,19 +1010,24 @@ ${section("7. Forensic Artifact Analysis", analysesHtml)}
 
 ${section(
   "8. CrewAI Investigation Review",
-  `<p><b>Status:</b> ${safe(result.crewai_review?.status ?? result.crewai_analysis?.status, "Not available")}</p>
-   <p><b>Evidence reviewed:</b> ${safe(result.crewai_review?.evidence_reviewed ?? result.crewai_analysis?.evidence_reviewed, "Not available")}</p>
-   <pre>${safe(result.crewai_review?.analysis ?? result.crewai_review?.review ?? result.crewai_analysis?.analysis ?? "No CrewAI analysis was returned.")}</pre>
-   <p><b>Warning:</b> ${safe(result.crewai_review?.warning ?? result.crewai_analysis?.warning, "None reported")}</p>`
+  `<p><b>Status:</b> ${safe(crewReview?.status, "Not available")}</p>
+   <p><b>Evidence reviewed:</b> ${safe(crewReview?.evidence_reviewed, "Not available")}</p>
+   <p><b>Runtime:</b> ${safe(crewReview?.duration_seconds, "Not available")} seconds</p>
+   <pre>${safe(redactArtifactText(crewReviewText), "No CrewAI analysis was returned.")}</pre>
+   <p><b>Warning:</b> ${safe(crewReview?.warning, "None reported")}</p>`
 )}
 
 ${section(
   "9. Monitoring and Evaluation",
-  `<p><b>Total runtime:</b> ${safe(result.monitoring?.total_runtime_seconds, "Not available")} seconds</p>
-   <p><b>Stage count:</b> ${safe(result.monitoring?.stage_count, "Not available")}</p>
-   <p><b>Failed stages:</b> ${safe(result.monitoring?.failed_stage_count, "Not available")}</p>
-   <p><b>Incomplete stages:</b> ${safe(result.monitoring?.incomplete_stage_count, "Not available")}</p>
-   <pre>${safe(result.monitoring?.stages ?? "No stage metrics returned.")}</pre>`
+  `<p><b>Total runtime:</b> ${safe(monitoring.total_runtime_seconds)} seconds</p>
+   <p><b>Stage count:</b> ${safe(monitoring.stage_count, monitoringStages.length)}</p>
+   <p><b>Failed stages:</b> ${safe(monitoring.failed_stage_count, 0)}</p>
+   <p><b>Incomplete stages:</b> ${safe(monitoring.incomplete_stage_count, 0)}</p>
+   <p><b>Model:</b> ${safe(monitoring.model)}</p>
+   <p><b>Ollama base URL:</b> ${safe(monitoring.ollama_base_url ?? monitoring.base_url)}</p>
+   <p><b>Estimated cost:</b> ${safe(monitoring.estimated_cost ?? monitoring.cost_estimate, "Not measured")}</p>
+   <p>${safe(monitoring.estimated_cost_note, "")}</p>
+   ${monitoringStagesHtml}`
 )}
 
 ${section(
@@ -912,7 +1085,6 @@ ${section(
     link.click();
     link.remove();
 
-    // Delay revocation so the browser has time to start the download.
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
