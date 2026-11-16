@@ -12,7 +12,11 @@ try:
 except ImportError:
     Client = None
 
-from a2a.client import A2ACardResolver, create_client
+try:
+    from a2a.client import A2ACardResolver, create_client
+except ImportError:
+    A2ACardResolver = None
+    create_client = None
 from a2a.helpers import get_artifact_text, get_message_text
 from a2a.types import Message, Part, Role, SendMessageRequest
 
