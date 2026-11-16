@@ -14,11 +14,12 @@ except ImportError:
 
 try:
     from a2a.client import A2ACardResolver, create_client
+    from a2a.helpers import get_artifact_text, get_message_text
 except ImportError:
     A2ACardResolver = None
     create_client = None
-from a2a.helpers import get_artifact_text, get_message_text
-from a2a.types import Message, Part, Role, SendMessageRequest
+    get_artifact_text = None
+    get_message_text = None
 
 
 MCP_SERVER_URL = os.getenv(
