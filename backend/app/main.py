@@ -35,4 +35,5 @@ def home():
     }
 
 
-app.mount("/", a2a_app)
+if a2a_app is not None:
+    app.mount("/", a2a_app)
