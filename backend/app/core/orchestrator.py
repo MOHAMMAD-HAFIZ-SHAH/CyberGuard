@@ -36,7 +36,10 @@ from backend.app.services.tsk_service import (
 )
 
 from backend.app.services.ollama_service import analyze_forensic_artifact
-from backend.app.adk.adk_service import review_investigation
+try:
+    from backend.app.adk.adk_service import review_investigation
+except ImportError:
+    review_investigation = None
 
 
 logger = logging.getLogger("cyberguard.investigation")
