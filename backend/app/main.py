@@ -4,7 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config.settings import APP_NAME
 from backend.app.api.routes import router
-from backend.app.a2a.server import app as a2a_app
+try:
+    from backend.app.a2a.server import app as a2a_app
+except ImportError:
+    a2a_app = None
 
 app = FastAPI(
     title=APP_NAME,
