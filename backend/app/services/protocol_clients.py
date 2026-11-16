@@ -7,7 +7,10 @@ from typing import Any
 
 import httpx
 
-from mcp import Client
+try:
+    from mcp import Client
+except ImportError:
+    Client = None
 
 from a2a.client import A2ACardResolver, create_client
 from a2a.helpers import get_artifact_text, get_message_text
