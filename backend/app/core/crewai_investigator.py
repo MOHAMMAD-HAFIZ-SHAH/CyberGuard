@@ -1,12 +1,10 @@
-
 import logging
 import os
 import re
 import time
 from typing import Any
 
-from crewai import Agent, Crew, Process, Task
-from langchain_community.llms import Ollama
+from crewai import Agent, Crew, LLM, Process, Task
 
 
 logger = logging.getLogger("cyberguard.crewai")
@@ -372,14 +370,24 @@ def review_investigation_with_crew(
             _safe_text(investigation_goal, 500)
         )
 
-        model_name = os.getenv(
+        raw_model = os.getenv(
             "OLLAMA_MODEL",
             DEFAULT_MODEL,
+        ).strip()
+
+        model_name = (
+            raw_model
+            if raw_model.startswith("ollama/")
+            else f"ollama/{raw_model}"
         )
 
-        base_url = os.getenv(
-            "OLLAMA_BASE_URL",
-            DEFAULT_BASE_URL,
+        base_url = (
+            os.getenv(
+                "OLLAMA_BASE_URL",
+                DEFAULT_BASE_URL,
+            )
+            .strip()
+            .rstrip("/")
         )
 
         logger.info(
@@ -388,12 +396,11 @@ def review_investigation_with_crew(
             model_name,
         )
 
-        llm = Ollama(
+        llm = LLM(
             model=model_name,
             base_url=base_url,
             temperature=0.1,
-            num_predict=MAX_OUTPUT_TOKENS,
-            num_ctx=4096,
+            max_tokens=MAX_OUTPUT_TOKENS,
         )
 
         analyst = Agent(
