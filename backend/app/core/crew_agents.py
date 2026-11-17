@@ -106,14 +106,17 @@ def crew_agents_enabled() -> bool:
 
 
 def _build_llm() -> Any:
-    from langchain_community.llms import Ollama
+    from crewai import LLM
 
-    return Ollama(
-        model=os.getenv("OLLAMA_MODEL", DEFAULT_MODEL),
-        base_url=os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL),
+    raw_model = os.getenv("OLLAMA_MODEL", DEFAULT_MODEL).strip()
+    model_name = raw_model if raw_model.startswith("ollama/") else f"ollama/{raw_model}"
+    base_url = os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL).strip().rstrip("/")
+
+    return LLM(
+        model=model_name,
+        base_url=base_url,
         temperature=0.1,
-        num_predict=MAX_NOTE_TOKENS,
-        num_ctx=4096,
+        max_tokens=MAX_NOTE_TOKENS,
     )
 
 
@@ -178,22 +181,23 @@ def run_crew_agent(
     if crew_agents_enabled():
         try:
             from crewai import Agent, Crew, Process, Task
-            from langchain_core.tools import Tool
+            from crewai.tools import tool as crewai_tool
 
-            tool = Tool(
-                name=f"{agent_name}_tool",
-                func=tool_body,
-                description=(
-                    f"Runs the {spec['role']} analysis and returns a summary. "
-                    "Call it once with an empty string."
-                ),
+            @crewai_tool(f"{agent_name}_tool")
+            def agent_tool(query: str = "") -> str:
+                """Runs the forensic analysis tool and returns a summary."""
+                return tool_body(query)
+
+            agent_tool.description = (
+                f"Runs the {spec['role']} analysis and returns a summary. "
+                "Call it once with an empty string."
             )
 
             agent = Agent(
                 role=spec["role"],
                 goal=spec["goal"],
                 backstory=SHARED_BACKSTORY,
-                tools=[tool],
+                tools=[agent_tool],
                 llm=_build_llm(),
                 verbose=False,
                 allow_delegation=False,
